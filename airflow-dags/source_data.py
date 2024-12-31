@@ -62,9 +62,17 @@ def parse_user_data(**kwargs):
     task_instance = kwargs['ti']
     task_instance.xcom_push(key='person_dict', value=person_dict)
 
-def produce_to_kafka(person_dict: dict):
+def produce_to_kafka(person_dict):
+    if isinstance(person_dict, str):
+        try:
+            person_dict = json.loads(person_dict.replace("'", '"'))
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            raise
+        
     yield ("person", json.dumps(person_dict))
-    logger.info("Sent to Kafka")
+    logger.info(f"Sent to Kafka: {person_dict}")
 
 with DAG('stream_user_data', default_args=default_args, schedule_interval=schedule_interval, catchup=False) as dag:
     

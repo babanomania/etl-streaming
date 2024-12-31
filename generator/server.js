@@ -8,7 +8,7 @@ const generateUser = () => {
   return {
     results: [
       {
-        gender: faker.person.gender(),
+        gender: faker.person.sex(),
         name: {
           title: faker.person.prefix(),
           first: faker.person.firstName(),

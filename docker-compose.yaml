@@ -20,9 +20,7 @@ services:
       - $AIRFLOW_WEBSERVER_PORT:8080
     command: >
       bash -c "
-        if ! airflow db check > /dev/null 2>&1; then
-          airflow db init
-        fi &&
+        airflow db init &&
         if ! airflow users list | grep -q $AIRFLOW_USERNAME; then
           airflow users create --username $AIRFLOW_USERNAME --firstname Admin --lastname User --role Admin --email admin@example.com --password $AIRFLOW_PASSWORD
         fi &&
@@ -57,8 +55,6 @@ services:
       - POSTGRES_USER=$AIRFLOW_POSTGRES_USERNAME
       - POSTGRES_PASSWORD=$AIRFLOW_POSTGRES_PASSWORD
       - POSTGRES_DB=$AIRFLOW_POSTGRES_DB
-    volumes: 
-      - postgres-data:/var/lib/postgresql/data
 
   airflow-redis:
     container_name: airflow-redis
@@ -84,6 +80,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
     depends_on:
       - kafka-zookeeper
 
@@ -105,12 +103,53 @@ services:
 
       echo -e 'Creating kafka topics'
       kafka-topics --bootstrap-server kafka-broker:29092 --create --if-not-exists --topic $KAFKA_TOPIC_PERSON --replication-factor 1 --partitions 1
-
+    
       echo -e 'Successfully created the following topics:'
       kafka-topics --bootstrap-server kafka-broker:29092 --list
       "
     depends_on:
       - kafka-broker
 
-volumes:
-  postgres-data:
+  ksqldb-server:
+    container_name: ksqldb-server
+    image: confluentinc/cp-ksqldb-server:latest
+    hostname: ksqldb-server
+    ports:
+      - 8088:8088
+    healthcheck:
+      test: curl -f http://ksqldb-server:8088/ || exit 1
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: kafka-broker:29092
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+    depends_on:
+      - kafka-broker
+
+  ksqldb-init-scripts:
+    container_name: ksqldb-init-scripts
+    image: confluentinc/cp-ksqldb-cli:latest
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      echo -e 'Creating ksqlDB streams and tables'
+      ls -ltr '/scripts/';
+      ksql http://ksqldb-server:8088 <<EOF
+      RUN SCRIPT '/scripts/ksqldb-init.sql';
+      EOF
+      "
+    volumes:
+      - ./ksql-scripts/:/scripts/
+    depends_on:
+      ksqldb-server:
+        condition: service_healthy
+
+  # docker exec -it ksqldb-cli ksql http://ksqldb-server:8088
+  ksqldb-cli:
+    container_name: ksqldb-cli
+    image: confluentinc/cp-ksqldb-cli:latest
+    entrypoint: /bin/sh
+    tty: true
+    depends_on:
+      - kafka-broker
+      - ksqldb-server
