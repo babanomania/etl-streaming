@@ -1,0 +1,59 @@
+services:
+  generator:
+    container_name: generator
+    build: generator/
+
+  airflow-webserver:
+    container_name: airflow-webserver
+    image: apache/airflow:latest
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${airflow.postgres.username}:${airflow.postgres.password}@airflow-postgres:5432/${airflow.postgres.db}
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${airflow.webserver.secret_key}
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
+    volumes:
+      - ./airflow-dags:/opt/airflow/dags
+    ports:
+      - ${airflow.webserver.port}:8080
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username ${airflow.username} --firstname Admin --lastname User --role Admin --email admin@example.com --password ${airflow.password} &&
+        airflow webserver
+      "
+    depends_on:
+      - airflow-postgres
+      - airflow-scheduler
+      - airflow-redis
+      - generator
+
+  airflow-scheduler:
+    container_name: airflow-scheduler
+    image: apache/airflow:latest
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${airflow.postgres.username}:${airflow.postgres.password}@airflow-postgres:5432/${airflow.postgres.db}
+      - AIRFLOW__WEBSERVER__SECRET_KEY=${airflow.webserver.secret_key}
+    volumes:
+      - ./airflow-dags:/opt/airflow/dags
+    command: airflow scheduler
+    depends_on:
+      - airflow-postgres
+
+  airflow-postgres:
+    container_name: airflow-postgres
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=${airflow.postgres.user}
+      - POSTGRES_PASSWORD=${airflow.postgres.password}
+      - POSTGRES_DB=${airflow.postgres.db}
+    volumes: 
+      - postgres-data:/var/lib/postgresql/data
+
+  airflow-redis:
+    container_name: airflow-redis
+    image: redis:latest
+
+volumes:
+  postgres-data:
