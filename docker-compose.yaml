@@ -8,18 +8,22 @@ services:
     image: apache/airflow:latest
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${airflow.postgres.username}:${airflow.postgres.password}@airflow-postgres:5432/${airflow.postgres.db}
-      - AIRFLOW__WEBSERVER__SECRET_KEY=${airflow.webserver.secret_key}
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
       - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
     volumes:
       - ./airflow-dags:/opt/airflow/dags
     ports:
-      - ${airflow.webserver.port}:8080
+      - $AIRFLOW_WEBSERVER_PORT:8080
     command: >
       bash -c "
-        airflow db init &&
-        airflow users create --username ${airflow.username} --firstname Admin --lastname User --role Admin --email admin@example.com --password ${airflow.password} &&
+        if ! airflow db check > /dev/null 2>&1; then
+          airflow db init
+        fi &&
+        if ! airflow users list | grep -q $AIRFLOW_USERNAME; then
+          airflow users create --username $AIRFLOW_USERNAME --firstname Admin --lastname User --role Admin --email admin@example.com --password $AIRFLOW_PASSWORD
+        fi &&
         airflow webserver
       "
     depends_on:
@@ -33,8 +37,8 @@ services:
     image: apache/airflow:latest
     environment:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${airflow.postgres.username}:${airflow.postgres.password}@airflow-postgres:5432/${airflow.postgres.db}
-      - AIRFLOW__WEBSERVER__SECRET_KEY=${airflow.webserver.secret_key}
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://$AIRFLOW_POSTGRES_USERNAME:$AIRFLOW_POSTGRES_PASSWORD@airflow-postgres:5432/$AIRFLOW_POSTGRES_DB
+      - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
     volumes:
       - ./airflow-dags:/opt/airflow/dags
     command: airflow scheduler
@@ -45,9 +49,9 @@ services:
     container_name: airflow-postgres
     image: postgres:latest
     environment:
-      - POSTGRES_USER=${airflow.postgres.user}
-      - POSTGRES_PASSWORD=${airflow.postgres.password}
-      - POSTGRES_DB=${airflow.postgres.db}
+      - POSTGRES_USER=$AIRFLOW_POSTGRES_USERNAME
+      - POSTGRES_PASSWORD=$AIRFLOW_POSTGRES_PASSWORD
+      - POSTGRES_DB=$AIRFLOW_POSTGRES_DB
     volumes: 
       - postgres-data:/var/lib/postgresql/data
 
