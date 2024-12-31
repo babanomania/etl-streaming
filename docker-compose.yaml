@@ -114,8 +114,6 @@ services:
     container_name: ksqldb-server
     image: confluentinc/cp-ksqldb-server:latest
     hostname: ksqldb-server
-    ports:
-      - 8088:8088
     healthcheck:
       test: curl -f http://ksqldb-server:8088/ || exit 1
     environment:
