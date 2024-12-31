@@ -1,8 +1,10 @@
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
+from airflow.providers.apache.kafka.operators.produce import ProduceToTopicOperator
 from datetime import datetime, timedelta
 import requests
 import logging
+import json
 
 default_args = {
     'owner': 'airflow',
@@ -13,6 +15,19 @@ default_args = {
 schedule_interval = '*/10 * * * * *'
 
 logger = logging.getLogger(__name__)
+
+def load_connections():
+    
+    from airflow.models import Connection
+    from airflow.utils import db
+
+    db.merge_conn(
+        Connection(
+            conn_id="t1",
+            conn_type="kafka",
+            extra=json.dumps({"socket.timeout.ms": 10, "bootstrap.servers": "kafka-broker:29092"}),
+        )
+    )
 
 def fetch_user_data(**kwargs):
     response = requests.get('http://generator:3000/api/user')
@@ -27,7 +42,7 @@ def fetch_user_data(**kwargs):
         logger.error(error_msg)
         raise Exception(error_msg)
 
-def create_dataframe(**kwargs):
+def parse_user_data(**kwargs):
     user_data = kwargs['ti'].xcom_pull(key='user_data', task_ids='fetch_user_data')
     logger.info(f"user_data: {user_data}")
     
@@ -43,17 +58,37 @@ def create_dataframe(**kwargs):
     }
 
     logger.info(f"Person: {person_dict}")
-    
+
+    task_instance = kwargs['ti']
+    task_instance.xcom_push(key='person_dict', value=person_dict)
+
+def produce_to_kafka(person_dict: dict):
+    yield ("person", json.dumps(person_dict))
+    logger.info("Sent to Kafka")
 
 with DAG('stream_user_data', default_args=default_args, schedule_interval=schedule_interval, catchup=False) as dag:
+    
+    load_connections_task = PythonOperator(
+        task_id='load_connections',
+        python_callable=load_connections
+    )
+    
     fetch_user_data_task = PythonOperator(
         task_id='fetch_user_data',
         python_callable=fetch_user_data
     )
 
-    create_dataframe_task = PythonOperator(
-        task_id='create_dataframe',
-        python_callable=create_dataframe
+    parse_user_data_task = PythonOperator(
+        task_id='parse_user_data',
+        python_callable=parse_user_data
     )
 
-    fetch_user_data_task >> create_dataframe_task
+    produce_to_kafka_task = ProduceToTopicOperator(
+        topic="{{ var.value.kafka_topic }}",
+        kafka_config_id='t1',
+        task_id='produce_to_kafka',
+        producer_function=produce_to_kafka, 
+        producer_function_args=["{{ ti.xcom_pull(key='person_dict', task_ids='parse_user_data') }}"],
+    )
+
+    load_connections_task >> fetch_user_data_task >> parse_user_data_task >> produce_to_kafka_task
