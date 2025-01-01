@@ -174,8 +174,6 @@ services:
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
       AWS_ACCESS_KEY_ID: $MINIO_ACCESS_KEY
       AWS_SECRET_ACCESS_KEY: $MINIO_SECRET_KEY
-    ports:
-      - 8083:8083
     healthcheck:
       test: curl -f http://kafka-connect:8083 | grep -q 'kafka_cluster_id' || exit 1
     command:
@@ -199,7 +197,7 @@ services:
     environment:
       CONNECT_URL: http://kafka-connect:8083
     ports:
-      - 8082:8000
+      - $KAFKA_CONNECT_UI_PORT:8000
     depends_on:
       - kafka-connect
   
@@ -213,8 +211,7 @@ services:
     healthcheck:
       test: curl -f http://minio:9000/minio/health/ready || exit 1
     ports:
-      - 9000:9000
-      - 9001:9001
+      - $MINIO_CONSOLE_PORT:9001
 
   minio-init:
     container_name: minio-init
