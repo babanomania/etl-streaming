@@ -12,8 +12,6 @@ default_args = {
     'start_date': datetime(2023, 1, 1)
 }
 
-schedule_interval = '*/10 * * * * *'
-
 logger = logging.getLogger(__name__)
 
 def load_connections():
@@ -74,16 +72,20 @@ def produce_to_kafka(person_dict):
     yield ("person", json.dumps(person_dict))
     logger.info(f"Sent to Kafka: {person_dict}")
 
-with DAG('stream_user_data', default_args=default_args, schedule_interval=schedule_interval, catchup=False) as dag:
+with DAG('stream_user_data', default_args=default_args, schedule_interval=timedelta(seconds=5), catchup=False) as dag:
+    
+    dag.max_active_runs = 5  # Allow 3 parallel runs
     
     load_connections_task = PythonOperator(
         task_id='load_connections',
-        python_callable=load_connections
+        python_callable=load_connections,
+        pool='default_pool'
     )
     
     fetch_user_data_task = PythonOperator(
         task_id='fetch_user_data',
-        python_callable=fetch_user_data
+        python_callable=fetch_user_data,
+        pool_slots=1,  # Each task takes 1 slot
     )
 
     parse_user_data_task = PythonOperator(

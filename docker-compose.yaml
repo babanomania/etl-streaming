@@ -13,7 +13,8 @@ services:
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
       - AIRFLOW__CELERY__BROKER_URL=redis://:@redis:6379/0
       - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
-      - AIWFLOW_VAR_KAFKA_TOPIC_PERSON=$KAFKA_TOPIC_PERSON
+      - AIRFLOW_VAR_KAFKA_TOPIC_PERSON=$KAFKA_TOPIC_PERSON
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
     volumes:
       - ./airflow-dags:/opt/airflow/dags
     ports:
@@ -42,6 +43,7 @@ services:
       - AIRFLOW__WEBSERVER__SECRET_KEY=$AIRFLOW_WEBSERVER_SECRET_KEY
       - _PIP_ADDITIONAL_REQUIREMENTS=${_PIP_ADDITIONAL_REQUIREMENTS:- apache-airflow-providers-apache-kafka}
       - AIRFLOW_VAR_KAFKA_TOPIC=$KAFKA_TOPIC_PERSON
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
     volumes:
       - ./airflow-dags:/opt/airflow/dags
     command: airflow scheduler
@@ -124,8 +126,8 @@ services:
     depends_on:
       - kafka-broker
 
-  ksqldb-init-scripts:
-    container_name: ksqldb-init-scripts
+  ksqldb-init:
+    container_name: ksqldb-init
     image: confluentinc/cp-ksqldb-cli:latest
     entrypoint: [ '/bin/sh', '-c' ]
     command: |
@@ -151,3 +153,117 @@ services:
     depends_on:
       - kafka-broker
       - ksqldb-server
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.1
+    container_name: kafka-connect
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka-broker:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: "kafka-connect-s3"
+      CONNECT_CONFIG_STORAGE_TOPIC: "kafka-connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "kafka-connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "kafka-connect-status"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.storage.StringConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      AWS_ACCESS_KEY_ID: $MINIO_ACCESS_KEY
+      AWS_SECRET_ACCESS_KEY: $MINIO_SECRET_KEY
+    ports:
+      - 8083:8083
+    healthcheck:
+      test: curl -f http://kafka-connect:8083 | grep -q 'kafka_cluster_id' || exit 1
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing S3 Connector"
+        confluent-hub install --no-prompt confluentinc/kafka-connect-s3:10.5.19
+        #
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        #
+        sleep infinity
+    depends_on:
+      - kafka-broker
+      - minio
+
+  kafka-connect-ui:
+    image: landoop/kafka-connect-ui:latest
+    container_name: kafka-connect-ui
+    environment:
+      CONNECT_URL: http://kafka-connect:8083
+    ports:
+      - 8082:8000
+    depends_on:
+      - kafka-connect
+  
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: $MINIO_ACCESS_KEY
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server --console-address :9001 /data
+    healthcheck:
+      test: curl -f http://minio:9000/minio/health/ready || exit 1
+    ports:
+      - 9000:9000
+      - 9001:9001
+
+  minio-init:
+    container_name: minio-init
+    image: quay.io/minio/mc
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set minio http://minio:9000 $MINIO_ACCESS_KEY $MINIO_SECRET_KEY &&
+      /usr/bin/mc mb minio/$MINIO_BUCKET || true
+      "
+    depends_on:
+      minio:
+        condition: service_healthy
+  
+  s3-connector-init:
+    container_name: s3-connector-init
+    image: curlimages/curl:latest
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Kafka Connect...';
+      while ! curl -s http://kafka-connect:8083/ | grep -q 'kafka_cluster_id'; do
+        sleep 5;
+        echo 'Waiting for Kafka Connect to be available...';
+      done;
+      echo 'Kafka Connect is ready. Configuring S3 Sink Connector...';
+      curl -X POST -H 'Content-Type: application/json' --data '{
+        \"name\": \"s3-sink-connector\",
+        \"config\": {
+          \"connector.class\": \"io.confluent.connect.s3.S3SinkConnector\",
+          \"tasks.max\": \"1\",
+          \"topics\": \"person\",
+          \"s3.bucket.name\": \"$MINIO_BUCKET\",
+          \"s3.region\": \"us-east-1\",
+          \"store.url\": \"http://minio:9000\",
+          \"key.converter\": \"org.apache.kafka.connect.storage.StringConverter\",
+          \"value.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+          \"storage.class\": \"io.confluent.connect.s3.storage.S3Storage\",
+          \"format.class\": \"io.confluent.connect.s3.format.json.JsonFormat\",
+          \"value.converter.schemas.enable\": \"false\",
+          \"flush.size\": \"10\",
+          \"rotate.interval.ms\": \"60000\",
+          \"aws.access.key.id\": \"$MINIO_ACCESS_KEY\",
+          \"aws.secret.key\": \"$MINIO_SECRET_KEY\",
+          \"aws.credentials.provider.class\": \"com.amazonaws.auth.BasicAWSCredentialsProvider\"
+        }
+      }' http://kafka-connect:8083/connectors;
+      echo 'S3 Sink Connector configured successfully!';
+      "
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
