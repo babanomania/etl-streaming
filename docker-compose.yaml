@@ -222,7 +222,8 @@ services:
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc alias set minio http://minio:9000 $MINIO_ACCESS_KEY $MINIO_SECRET_KEY &&
-      /usr/bin/mc mb minio/$MINIO_BUCKET || true
+      /usr/bin/mc mb minio/$MINIO_BUCKET_PERSON &&
+      /usr/bin/mc mb minio/$MINIO_BUCKET_STATS || true
       "
     depends_on:
       minio:
@@ -240,12 +241,12 @@ services:
       done;
       echo 'Kafka Connect is ready. Configuring S3 Sink Connector...';
       curl -X POST -H 'Content-Type: application/json' --data '{
-        \"name\": \"s3-sink-connector\",
+        \"name\": \"s3-sink-connector-person\",
         \"config\": {
           \"connector.class\": \"io.confluent.connect.s3.S3SinkConnector\",
           \"tasks.max\": \"1\",
-          \"topics\": \"person\",
-          \"s3.bucket.name\": \"$MINIO_BUCKET\",
+          \"topics\": \"$KAFKA_TOPIC_PERSON\",
+          \"s3.bucket.name\": \"$MINIO_BUCKET_PERSON\",
           \"s3.region\": \"us-east-1\",
           \"store.url\": \"http://minio:9000\",
           \"key.converter\": \"org.apache.kafka.connect.storage.StringConverter\",
@@ -258,6 +259,28 @@ services:
           \"aws.access.key.id\": \"$MINIO_ACCESS_KEY\",
           \"aws.secret.key\": \"$MINIO_SECRET_KEY\",
           \"aws.credentials.provider.class\": \"com.amazonaws.auth.BasicAWSCredentialsProvider\"
+        }
+      }' http://kafka-connect:8083/connectors;
+      curl -X POST -H 'Content-Type: application/json' --data '{
+        \"name\": \"s3-sink-connector-person-stats\",
+        \"config\": {
+          \"connector.class\": \"io.confluent.connect.s3.S3SinkConnector\",
+          \"tasks.max\": \"1\",
+          \"topics\": \"$KAFKA_TOPIC_STATS\",
+          \"s3.bucket.name\": \"$MINIO_BUCKET_STATS\",
+          \"s3.region\": \"us-east-1\",
+          \"store.url\": \"http://minio:9000\",
+          \"key.converter\": \"org.apache.kafka.connect.storage.StringConverter\",
+          \"value.converter\": \"org.apache.kafka.connect.json.JsonConverter\",
+          \"storage.class\": \"io.confluent.connect.s3.storage.S3Storage\",
+          \"format.class\": \"io.confluent.connect.s3.format.json.JsonFormat\",
+          \"value.converter.schemas.enable\": \"false\",
+          \"flush.size\": \"1\",
+          \"rotate.interval.ms\": \"60000\",
+          \"aws.access.key.id\": \"$MINIO_ACCESS_KEY\",
+          \"aws.secret.key\": \"$MINIO_SECRET_KEY\",
+          \"aws.credentials.provider.class\": \"com.amazonaws.auth.BasicAWSCredentialsProvider\",
+          \"store.kafka.keys\" : \"true\"
         }
       }' http://kafka-connect:8083/connectors;
       echo 'S3 Sink Connector configured successfully!';
